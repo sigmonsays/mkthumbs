@@ -1,0 +1,247 @@
+#!/bin/bash
+# Description: simple script to generate resized thumbnails and html pages from a directory of images
+
+
+ERRORS=0
+INDEX="1.html"
+COLUMNS=4
+IPP=15
+
+
+function page_header {
+cat << EOF
+<HTML>
+<HEAD>
+<style type='text/css'>
+<!--
+body {
+	color: #000000;
+	background: #e5e5e5;
+	font-family: Charter, sans-serif;
+	font-size: 14pt;
+	margin: 1em
+};
+
+h1 {
+	color: #000000;
+}
+table {
+	margin-left: auto;
+	margin-right: auto;
+}
+td {
+	color: #000000;
+	padding: 0.3em
+}
+-->
+</style>
+
+<TITLE>Images in directory $D - Page $INDEX_COUNTER</TITLE>
+<CENTER>
+<FONT SIZE=+1><B>Images in directory `basename "$D"`</B></FONT><BR>
+<B>Page $INDEX_COUNTER</B>
+</CENTER>
+<BR>
+
+<!-- main structure table -->
+<TABLE WIDTH="100%" BORDER=0>
+<TR>
+	<TD VALIGN=top STYLE="background-color: #accce5;">
+	`echo $PAGE_NAV`
+	</TD>
+
+	<TD>
+
+<TABLE WIDTH="100%" BORDER=0 ALIGN="center">
+EOF
+
+# ----------------- page nav shit
+cat << EOF >> "$INDEX"
+<TR><TD COLSPAN=${COLUMNS}>
+</TD></TR>
+EOF
+}
+
+function page_nav {
+IMAGE_COUNT=$1
+PAGE_COUNT=$2
+IPP=$3
+
+for((i=1; i<=$((PAGE_COUNT + 1)); i++))
+do
+	S=`expr $i \* $IPP`
+	S=$((S - $IPP + 1))
+	E=`expr $S + $IPP - 1`
+	if [ "$E" -ge "$IMAGE_COUNT" ] ; then
+		E=$IMAGE_COUNT
+	fi
+	echo "<A HREF=\"$i.html\">Page $i</A> ($S - $E)<BR>"
+	if [ "$((i % 6))" = "0" ] ; then
+		if [ "$E" = "$IMAGE_COUNT" ] ; then
+			echo "<BR>"
+		fi
+	fi
+done
+}
+function print_help_and_die_fool {
+	echo "Usage: mkthumbs [options]"
+	echo "Generate thumbnails and HTML in the current directory"
+	echo
+	echo "--no-convert		dont run convert, just re-write html"
+	echo "--help			display help"
+	exit 1
+}
+
+
+# --------------------------------- main
+
+if ! which convert 1>/dev/null 2>/dev/null ; then
+	echo "convert not found!"
+	echo "convert is part of the imageMagik package..."
+	exit 1
+fi
+
+CONVERT=`which convert`
+
+
+if echo "$@" | grep -q -- "--no-convert" ; then
+	CONVERT="true"
+fi
+
+if echo "$@" | grep -q -- "--help" ; then
+	print_help_and_die_fool
+	exit 1
+fi
+
+T=`tempfile`
+D=`pwd`
+
+if ! find -maxdepth 1 -iname \*.jpg -o -iname \*.png -o -iname \*.jpeg -o -iname \*.gif > $T 2>/dev/null ; then
+	echo "ERROR: find error"
+	rm -f "$T"
+	exit 1
+fi
+
+IMAGE_COUNT=`wc -l "$T" | awk '{print $1}'`
+PAGE_COUNT=`expr $IMAGE_COUNT / $IPP`
+
+if [ "$IMAGE_COUNT" = 0 ] ; then
+	echo "ERROR: No images found"
+	rm -f "$T"
+	exit 1
+fi
+
+PAGE_NAV=`page_nav $IMAGE_COUNT $PAGE_COUNT $IPP`
+
+if [ ! -d thumbs ] ; then
+	if ! mkdir thumbs > /dev/null ; then
+		rm -f "$T"
+		echo "Couldn't create thumbs directory!"
+		exit 1
+	fi
+fi
+
+C=0
+INDEX_COUNTER=1
+I=0
+U=0 # images counter
+V=0 # how many images were successfully converted
+page_header > "$INDEX"
+
+while read f
+do
+	B=`basename "$f"`
+
+	f="$B"
+	ff=`echo "$B" | tr -d "[%?]"`
+
+	if [ "$f" != "$ff" ] ; then
+
+		if [ -r "$ff" ] ;then
+			new_prefix=`date +%s%N`
+			ff2="$new_prefix$ff"
+			mv -f "$f" "$ff2"
+			ff="$ff2"
+		else
+			mv -f "$f" "$ff"
+		fi
+	fi
+	BASE="$ff"
+   NAME="${BASE%.*}"
+
+
+	echo $((U++)) >/dev/null
+
+
+   OK=true
+   if [ ! -f "thumbs/$BASE.png" ] ; then
+	   echo -n "$U/$IMAGE_COUNT Converting $BASE.."
+      if $CONVERT -sample 140x105 "$f" "thumbs/$BASE.png" 1>/dev/null 2>/dev/null ; then
+         OK=true
+         echo " OK"
+      else
+         OK=false
+         echo " FAILED ($((ERRORS++)) errors) "
+      fi
+   fi
+
+   if [ "$OK" == "true" ] ; then
+      echo $((V++)) >/dev/null
+      {
+         echo -e "\t<TD>"
+         #echo "<A HREF='$BASE' NAME=\"image$U\">Image $U</A> : "
+         echo "<A HREF='$BASE' NAME=\"image$U\">$NAME</A><BR>"
+         echo "<BR>"
+         echo "<A HREF='$BASE'><IMG SRC='thumbs/$BASE.png' STYLE='border: 1px solid black;'>"
+         echo "</TD>" 
+      } >> "$INDEX"
+      echo $((C++)) >/dev/null
+   fi
+
+	if [ $C == $COLUMNS ] ; then
+		C=0
+		echo -e "</TR>\n<TR>" >> "$INDEX"
+	fi
+
+	
+# /* CREATE NEW INDEX ----------------------------------------------------------
+	if [ $((++I)) == $IPP ] ; then
+	C=0
+
+	echo -e "\t Creating index $INDEX ... "
+
+# old index
+cat << EOF >> "$INDEX"
+</TR>
+<BR>
+<TD><TD COLSPAN="${COLUMNS}">${IMAGE_COUNT} images total</TD></TR>
+</TABLE>
+
+</TD></TR>
+</TABLE>
+EOF
+
+	echo $((INDEX_COUNTER++)) >/dev/null
+	INDEX=`echo -n "$INDEX_COUNTER" && echo ".html"`
+	I=0
+
+# create new one
+PAGE_NAV=`page_nav $IMAGE_COUNT $PAGE_COUNT $IPP`
+page_header > "$INDEX"
+
+	fi
+#    CREATE NEW INDEX ---------------------------------------------------------- */
+
+
+
+done < $T
+
+rm -f index.html
+ln -s 1.html index.html
+
+echo " -- $IMAGE_COUNT images -- "
+echo
+echo "Summary"
+echo "Attempted $U of which $V were converted ($ERRORS errors)"
+rm -f $T
+
